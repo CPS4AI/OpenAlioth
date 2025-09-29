@@ -599,6 +599,6 @@ if __name__ == "__main__":
     for H in exp_H:
         for W in exp_W:
             for K in exp_K:
-                exp_vp(H, W, K)
-                exp_hp_cat(H, W, K)
-                exp_hp_num(H, W, K, exp_ALPHA, jnp.array(exp_BETA))
+                # exp_vp(H, W, K)
+                # exp_hp_cat(H, W, K)
+                exp_hp_num(H, W, K, exp_ALPHA, jnp.array(exp_BETA), 2)
