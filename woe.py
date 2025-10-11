@@ -11,14 +11,7 @@ import argparse
 # exp_H           = [1000, 10000, 100000]    # 1K, 10K, 100K
 # exp_W           = [10, 50, 100]
 # exp_K           = [5, 10, 20]
-exp_H           = [1000]    # 1K, 10K, 100K
-exp_W           = [10]
-exp_K           = [5]
-exp_MIN_NUM_VAL = 1
-exp_MAX_NUM_VAL = 4
-exp_ALPHA       = 0.01
-exp_BETA        = [0.5]
-exp_OVERFLOW_FACTOR = 5
+
 
 '''
 Quantile.
@@ -393,8 +386,26 @@ import spu.spu_pb2 as spu_pb2
 import spu.utils.distributed as ppd
 
 parser = argparse.ArgumentParser(description='distributed driver.')
+parser.add_argument("-m", "--mode", default="vp", help="vp or hp_num or hp_cat")
 parser.add_argument("-c", "--config", default="conf/2pc.json")
+parser.add_argument("-H", default=1000, type=int, help="number of samples")
+parser.add_argument("-W", default=50, type=int, help="num of features")
+parser.add_argument("-K", default=10, type=int, help="num of classes")
+parser.add_argument("-a", "--alpha", default=0.01, type=float, help="error rate of DDSketch")
+parser.add_argument("-b", "--beta", nargs="+", default=[0.5], help="list of partition ratio")
+parser.add_argument("-t", "--times", default=1, type=int, help="number of experiments")
 args = parser.parse_args()
+
+exp_MODE        = args.mode
+exp_TIMES       = args.times
+exp_H           = args.H
+exp_W           = args.W
+exp_K           = args.K
+exp_MIN_NUM_VAL = 1
+exp_MAX_NUM_VAL = 4
+exp_ALPHA       = args.alpha
+exp_BETA        = args.beta
+exp_OVERFLOW_FACTOR = 5
 
 with open(args.config, 'r') as file:
     conf = json.load(file)
@@ -511,94 +522,11 @@ def exp_hp_num(H, W, K, alpha, beta, exp_times=1):
         res = ppd.get(res_enc)
         print("- woe hp num time: {:.2f} s".format(time.time() - start_time))
     print("- total time: {:.2f} s".format(time.time() - total_start_time))
-    
-# print("-----------------------VP setting-----------------------")
-# print("+ split data")
-# U, V, y = dataset_generator.split_vp(X, y, 0.5)
-# W1, W2 = U.shape[1], V.shape[1]
-
-# print("+ encode vp")
-# data_encoder = DataEncoder()
-# BU = ppd.device("P1")(data_encoder.encode_vp)(U)
-# BV = ppd.device("P2")(data_encoder.encode_vp)(V)
-
-# print("+ compute woe")
-# woevp = WoeVp()
-# zeta_pyu = ppd.device("P2")(woevp.get_zeta)(y, H)
-# z_pos_bob_pyu, z_neg_bob_pyu = ppd.device("P2")(woevp.get_z)(BV, y)
-# z_pos_bob_enc, z_neg_bob_enc, zeta_enc = ppd.device("SPU")(lambda x, y, z: (x, y, z))(z_pos_bob_pyu, z_neg_bob_pyu, zeta_pyu)
-
-# BU_pyu = BU
-# y_pyu = ppd.device("P2")(lambda x: x)(y)
-# z_pos_alice_enc, z_neg_alice_enc = ppd.device("SPU")(woevp.get_z)(BU_pyu, y_pyu)
-
-# z_pos_enc, z_neg_enc = ppd.device("SPU")(lambda xp, xn, yp, yn: (jnp.vstack((xp, yp)), jnp.vstack((xn, yn))))(z_pos_alice_enc, z_neg_alice_enc, z_pos_bob_enc, z_neg_bob_enc)
-# res_enc = ppd.device("SPU")(vectorized_sec_woe)(z_pos_enc, z_neg_enc, zeta_enc)
-# res = ppd.get(res_enc)
-
-
-# print("-----------------------HP setting, cat-----------------------")
-# print("+ split data")
-# U, V, yu, yv = dataset_generator.split_hp(X, y, 0.5)
-# H1, H2 = U.shape[0], V.shape[0]
-
-# print("+ encode hp")
-# data_encoder = DataEncoder()
-# max_cats = jnp.max(X, axis=0) + 1
-# BU_pyu = ppd.device("P1")(data_encoder.encode_hp_cat)(U, max_cats)
-# BV_pyu = ppd.device("P2")(data_encoder.encode_hp_cat)(V, max_cats)
-# yu_pyu = ppd.device("P1")(lambda x: x)(yu)
-# yv_pyu = ppd.device("P2")(lambda x: x)(yv)
-
-# print("+ compute z and zeta")
-# woehp = WoeHp()
-# zeta_spu = ppd.device("SPU")(woehp.get_zeta)(H1, H2, yu_pyu, yv_pyu)
-# z_pos_spu, z_neg_spu = ppd.device("SPU")(woehp.get_z)(BU_pyu, BV_pyu, yu_pyu, yv_pyu)
-
-# print("+ compute woe")
-# res_enc = ppd.device("SPU")(vectorized_sec_woe)(z_pos_spu, z_neg_spu, zeta_spu)
-# res = ppd.get(res_enc)
-
-
-# print("-----------------------HP setting, num-----------------------")
-# print("+ prepare params")
-# alpha = exp_ALPHA
-# beta = jnp.array(exp_BETA)
-# beta = jnp.tile(beta, (W, 1))
-# dds = DDSketch(alpha, beta)
-# bucket_offset = dds.get_bucket_offset(jnp.min(X_num, axis=0), jnp.max(X_num, axis=0))
-# dds.bucket_offset = bucket_offset
-# K = exp_K
-# dds.K = K
-
-# print("+ split data")
-# U, V, yu, yv = dataset_generator.split_hp(X_num, y_num, 0.5)
-# H1, H2 = U.shape[0], V.shape[0]
-
-# U = ppd.device("P1")(lambda x: x)(U)
-# V = ppd.device("P2")(lambda x: x)(V)
-# yu = ppd.device("P1")(lambda x: x)(yu)
-# yv = ppd.device("P2")(lambda x: x)(yv)
-
-# print("+ encode hp")
-# data_encoder = DataEncoder()
-# Su = ppd.device("P1")(dds.ddsketch_local)(U)
-# Sv = ppd.device("P2")(dds.ddsketch_local)(V)
-# I = ppd.device("SPU")(lambda Su, Sv: dds.ddsketch_global(Su, Sv, W))(Su, Sv)
-# B = ppd.device("SPU")(lambda I, U, V: data_encoder.encode_hp_num(I, U, V, alpha, beta, K, bucket_offset))(I, U, V)
-
-# print("+ compute z and zeta")
-# woehp = WoeHp()
-# z_pos_spu, z_neg_spu, zeta_spu = ppd.device("SPU")(woehp.get_all_for_num)(B, yu, yv)
-
-# print("+ compute woe")
-# res_enc = ppd.device("SPU")(vectorized_sec_woe)(z_pos_spu, z_neg_spu, zeta_spu)
-# res = ppd.get(res_enc)
 
 if __name__ == "__main__":
-    for H in exp_H:
-        for W in exp_W:
-            for K in exp_K:
-                # exp_vp(H, W, K)
-                # exp_hp_cat(H, W, K)
-                exp_hp_num(H, W, K, exp_ALPHA, jnp.array(exp_BETA), 2)
+    if exp_MODE == "vp":
+        exp_vp(exp_H, exp_W, exp_K, exp_times=exp_TIMES)
+    elif exp_MODE == "hp_cat":
+        exp_hp_cat(exp_H, exp_W, exp_K, exp_times=exp_TIMES)
+    elif exp_MODE == "hp_num":
+        exp_hp_num(exp_H, exp_W, exp_K, exp_ALPHA, jnp.array(exp_BETA), exp_times=exp_TIMES)

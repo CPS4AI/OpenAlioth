@@ -31,16 +31,22 @@ pip install dist/*.whl --force-reinstall
 
     ```sh
     # OpenBumbleBee
-    bazel run -c opt //examples/python/utils:nodectl --jobs 16 -- --config `pwd`/examples/python/conf/2pc.json up
+    bazel run -c opt //examples/python/utils:nodectl --jobs 16 -- --config `pwd`/examples/python/conf/2pc_alioth.json up
     # alioth-impl
-    python utils/nodectl.py --config `pwd`/conf/2pc.json up
+    python utils/nodectl.py --config `pwd`/conf/2pc_alioth.json up
     ```
 
-23. Run `woe` example
+2. Run `woe` example
 
     ```sh
     # OpenBumbleBee
-    bazel run -c opt //examples/python/stats:woe --jobs 16 -- --config `pwd`/examples/python/conf/2pc.json
+    bazel run -c opt //examples/python/stats:woe --jobs 16 -- --config `pwd`/examples/python/conf/2pc_alioth.json
     # alioth-impl
-    python woe.py
+    python woe.py -c `pwd`/conf/2pc_alioth.json
+    ```
+
+3. Exp
+
+    ```
+    python exp.py -s woe -m vp hp_cat hp_num -t 1 -H 1000 10000 100000 -W 10 50 100 -K 5 10 20 
     ```
