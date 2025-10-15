@@ -77,6 +77,7 @@ def quick_exp(test_suit: str, exp_modes: list, exp_times: int, exp_Hs: list, exp
                     
                     print( "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
                     print(f"Running experiment:  H={H}, W={W}, K={K}, alpha={alpha}, beta={beta}")
+                    print(f"Mode:                {mode}")
                     print(f"nodectl cmd:         {nodectl_cmd}")
                     print(f"node log path:       {node_log_path}")
                     print(f"task cmd:            {task_cmd}")

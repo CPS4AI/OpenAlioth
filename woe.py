@@ -114,6 +114,7 @@ class DDSketch:
         
         # AppQua step 10-14
         # compute the upper bound of each bucket
+        print(f"self.K: {self.K}, self.bucket_offset: {self.bucket_offset}")
         tau = jnp.arange(-self.K, self.K + 1)   # (2K+1)
         tau = jnp.tile(tau, (W, 1)) # (W, 2K+1)
         tau = tau - self.bucket_offset[:, jnp.newaxis]
@@ -203,6 +204,18 @@ def vectorized_sec_woe(z_pos: jax.Array, z_neg: jax.Array, zeta: jax.Array):
     temp = divz * zeta
     
     return jnp.log(temp)
+
+
+def transformation(B: jax.Array, w: jax.Array, max_cats: int = 1):
+    # ! Alert: W' = W * max_cats, i.e. B and w has been padding.
+    # B: (H, W')
+    # w: (W', num_labels)
+    B = jnp.reshape(B, (B.shape[0], B.shape[1] // max_cats, max_cats))
+    B = jnp.transpose(B, (1, 0, 2))
+    w = jnp.reshape(w, (w.shape[0] // max_cats, max_cats, w.shape[1]))
+    Lam = jax.lax.batch_matmul(B, w)
+    Lam = jnp.transpose(Lam, (1, 0, 2))
+    return Lam
 
 
 '''
@@ -392,7 +405,7 @@ parser.add_argument("-H", default=1000, type=int, help="number of samples")
 parser.add_argument("-W", default=50, type=int, help="num of features")
 parser.add_argument("-K", default=10, type=int, help="num of classes")
 parser.add_argument("-a", "--alpha", default=0.01, type=float, help="error rate of DDSketch")
-parser.add_argument("-b", "--beta", nargs="+", default=[0.5], help="list of partition ratio")
+parser.add_argument("-b", "--beta", nargs="+", default=[0.5], type=float, help="list of partition ratio")
 parser.add_argument("-t", "--times", default=1, type=int, help="number of experiments")
 args = parser.parse_args()
 
@@ -434,17 +447,17 @@ def exp_vp(H, W, K, exp_times=1):
 
         # print("+ compute woe")
         woevp = WoeVp()
-        zeta_pyu = ppd.device("P2")(woevp.get_zeta)(y, H)
-        z_pos_bob_pyu, z_neg_bob_pyu = ppd.device("P2")(woevp.get_z)(BV, y)
-        z_pos_bob_enc, z_neg_bob_enc, zeta_enc = z_pos_bob_pyu, z_neg_bob_pyu, zeta_pyu
+        zeta = ppd.device("P2")(woevp.get_zeta)(y, H)
+        z_pos_bob, z_neg_bob = ppd.device("P2")(woevp.get_z)(BV, y)
 
-        BU_pyu = BU
-        y_pyu = ppd.device("P2")(lambda x: x)(y)
-        z_pos_alice_enc, z_neg_alice_enc = ppd.device("SPU")(woevp.get_z)(BU_pyu, y_pyu)
+        y = ppd.device("P2")(lambda x: x)(y)
+        z_pos_alice, z_neg_alice = ppd.device("SPU")(woevp.get_z)(BU, y)
 
-        z_pos_enc, z_neg_enc = ppd.device("SPU")(lambda xp, xn, yp, yn: (jnp.vstack((xp, yp)), jnp.vstack((xn, yn))))(z_pos_alice_enc, z_neg_alice_enc, z_pos_bob_enc, z_neg_bob_enc)
-        res_enc = ppd.device("SPU")(vectorized_sec_woe)(z_pos_enc, z_neg_enc, zeta_enc)
-        res = ppd.get(res_enc)
+        z_pos, z_neg = ppd.device("SPU")(lambda xp, xn, yp, yn: (jnp.vstack((xp, yp)), jnp.vstack((xn, yn))))(z_pos_alice, z_neg_alice, z_pos_bob, z_neg_bob)
+        w = ppd.device("SPU")(vectorized_sec_woe)(z_pos, z_neg, zeta)
+        B = ppd.device("SPU")(lambda BU, BV: jnp.hstack((BU, BV)))(BU, BV)
+        res = ppd.device("SPU")(transformation)(B, w)
+        res = ppd.get(res)
         print("- woe vp time: {:.2f} s".format(time.time() - start_time))
     print("- total time: {:.2f} s".format(time.time() - total_start_time))
     
@@ -465,17 +478,19 @@ def exp_hp_cat(H, W, K, exp_times=1):
         print("+ exp iteration {}".format(i))
         start_time = time.time()
         data_encoder = DataEncoder()
-        BU_pyu = ppd.device("P1")(data_encoder.encode_hp_cat)(U, max_cats)
-        BV_pyu = ppd.device("P2")(data_encoder.encode_hp_cat)(V, max_cats)
-        yu_pyu = ppd.device("P1")(lambda x: x)(yu)
-        yv_pyu = ppd.device("P2")(lambda x: x)(yv)
+        BU = ppd.device("P1")(data_encoder.encode_hp_cat)(U, max_cats)
+        BV = ppd.device("P2")(data_encoder.encode_hp_cat)(V, max_cats)
+        yu = ppd.device("P1")(lambda x: x)(yu)
+        yv = ppd.device("P2")(lambda x: x)(yv)
 
         woehp = WoeHp()
-        zeta_spu = ppd.device("SPU")(woehp.get_zeta)(H1, H2, yu_pyu, yv_pyu)
-        z_pos_spu, z_neg_spu = ppd.device("SPU")(woehp.get_z)(BU_pyu, BV_pyu, yu_pyu, yv_pyu)
+        zeta = ppd.device("SPU")(woehp.get_zeta)(H1, H2, yu, yv)
+        z_pos, z_neg = ppd.device("SPU")(woehp.get_z)(BU, BV, yu, yv)
 
-        res_enc = ppd.device("SPU")(vectorized_sec_woe)(z_pos_spu, z_neg_spu, zeta_spu)
-        res = ppd.get(res_enc)
+        w = ppd.device("SPU")(vectorized_sec_woe)(z_pos, z_neg, zeta)
+        B = ppd.device("SPU")(lambda BU, BV: jnp.vstack((BU, BV)))(BU, BV)
+        res = ppd.device("SPU")(transformation)(B, w)
+        res = ppd.get(res)
         print("- woe hp cat time: {:.2f} s".format(time.time() - start_time))
     print("- total time: {:.2f} s".format(time.time() - total_start_time))
 
@@ -516,12 +531,108 @@ def exp_hp_num(H, W, K, alpha, beta, exp_times=1):
         B = ppd.device("SPU")(encode_hp_num)(I, U, V)
 
         woehp = WoeHp()
-        z_pos_spu, z_neg_spu, zeta_spu = ppd.device("SPU")(woehp.get_all_for_num)(B, yu, yv)
+        z_pos, z_neg, zeta = ppd.device("SPU")(woehp.get_all_for_num)(B, yu, yv)
 
-        res_enc = ppd.device("SPU")(vectorized_sec_woe)(z_pos_spu, z_neg_spu, zeta_spu)
-        res = ppd.get(res_enc)
+        w = ppd.device("SPU")(vectorized_sec_woe)(z_pos, z_neg, zeta)
+        res = ppd.device("SPU")(transformation)(B, w)
+        res = ppd.get(res)
         print("- woe hp num time: {:.2f} s".format(time.time() - start_time))
     print("- total time: {:.2f} s".format(time.time() - total_start_time))
+    
+    
+def exp_mbm_appqua(H, W, K, alpha, beta, exp_times=1):
+    print("-----------------------HP setting, num-----------------------")
+    
+    print("+ generate dataset")
+    dataset_generator = Synthesis(H, W, 1, K)
+    X, y = dataset_generator.generate_num_dataset()
+    U, V, yu, yv = dataset_generator.split_hp(X, y, 0.5)
+    H1, H2 = U.shape[0], V.shape[0]
+    dds = DDSketch(alpha, beta)
+    # dds.update_params_from_range(jnp.min(X, axis=0), jnp.max(X, axis=0))
+    dds.K = 70
+    dds.bucket_offset = dds.get_bucket_offset(jnp.min(X, axis=0), jnp.max(X, axis=0))
+    
+    def ddsketch_global(Su, Sv):
+        return dds.ddsketch_global(Su, Sv, W)
+    
+    total_start_time = time.time()
+    for i in range(exp_times):
+        print("+ exp iteration {}".format(i))
+        U, V, yu, yv = dataset_generator.split_hp(X, y, 0.5)
+        start_time = time.time()
+        U = ppd.device("P1")(lambda x: x)(U)
+        V = ppd.device("P2")(lambda x: x)(V)
+        yu = ppd.device("P1")(lambda x: x)(yu)
+        yv = ppd.device("P2")(lambda x: x)(yv)
+
+        data_encoder = DataEncoder()
+        Su = ppd.device("P1")(dds.ddsketch_local)(U)
+        Sv = ppd.device("P2")(dds.ddsketch_local)(V)
+        I = ppd.device("SPU")(ddsketch_global)(Su, Sv)
+
+        print("- microbenchmark appqua time: {:.2f} s".format(time.time() - start_time))
+    print("- total time: {:.2f} s".format(time.time() - total_start_time))
+    
+
+def exp_mbm_transformation(Kj, Km, H=10000, W=10, num_label=1, exp_times=1):
+    print("-----------------------transformation-----------------------")
+    
+    W = W * Km
+    start_time = time.time()
+    for i in range(exp_times):
+        w0, w1 = jnp.zeros((W, num_label), dtype=jnp.float32), jnp.ones((W, num_label), dtype=jnp.float32)
+        B0, B1 = jnp.zeros((H, W), dtype=jnp.int32), jnp.ones((H, W), dtype=jnp.int32)
+        
+        B0, B1 = ppd.device("P1")(lambda x: x)(B0), ppd.device("P2")(lambda x: x)(B1)
+        w0, w1 = ppd.device("P1")(lambda x: x)(w0), ppd.device("P2")(lambda x: x)(w1)
+        B = ppd.device("SPU")(lambda B0, B1: B0 + B1)(B0, B1)
+        w = ppd.device("SPU")(lambda w0, w1: w0 + w1)(w0, w1)
+        
+        transformation_start = time.time()
+        res = ppd.device("SPU")(transformation)(B, w)
+        res = ppd.get(res)
+        print("- microbenchmark transformation time: {:.2f} s".format(time.time() - transformation_start))
+    print("- total time: {:.2f} s".format(time.time() - start_time))
+    
+
+def exp_mbm_naive_transformation(Kj, Km, H=10000, W=100, num_label=1, exp_times=1):
+    print("-----------------------naive transformation-----------------------")
+    
+    def p0_input(x):
+        x = ppd.device("P1")(lambda x: x)(x)
+        return ppd.device("SPU")(lambda x: x)(x)
+    
+    def p1_input(x):
+        x = ppd.device("P2")(lambda x: x)(x)
+        return ppd.device("SPU")(lambda x: x)(x)
+    
+    def naive_transformation(B, w):
+        return jnp.matmul(B, w)
+    
+    start_time = time.time()
+    for i in range(exp_times):
+        w0, w1 = [p0_input(jnp.zeros((Km, num_label), dtype=jnp.float32))], [p1_input(jnp.ones((Km, num_label), dtype=jnp.float32))]
+        for j in range(W - 1):
+            w0.append(p0_input(jnp.zeros((Kj, num_label), dtype=jnp.float32)))
+            w1.append(p1_input(jnp.ones((Kj, num_label), dtype=jnp.float32)))
+        B0, B1 = [p0_input(jnp.zeros((H, Km), dtype=jnp.int32))], [p1_input(jnp.ones((H, Km), dtype=jnp.int32))]
+        for j in range(W - 1):
+            B0.append(p0_input(jnp.zeros((H, Kj), dtype=jnp.int32)))
+            B1.append(p1_input(jnp.ones((H, Kj), dtype=jnp.int32)))
+        w, B = [], []
+        for j in range(W):
+            w.append(ppd.device("SPU")(lambda w0, w1: w0 + w1)(w0[j], w1[j]))
+            B.append(ppd.device("SPU")(lambda B0, B1: B0 + B1)(B0[j], B1[j]))
+        
+        transformation_start = time.time()
+        res = []
+        for j in range(W):
+            temp = ppd.device("SPU")(naive_transformation)(B[j], w[j])
+            res.append(ppd.get(temp))
+        print("- microbenchmark naive transformation time: {:.2f} s".format(time.time() - transformation_start))
+    print("- total time: {:.2f} s".format(time.time() - start_time))
+
 
 if __name__ == "__main__":
     if exp_MODE == "vp":
@@ -530,3 +641,9 @@ if __name__ == "__main__":
         exp_hp_cat(exp_H, exp_W, exp_K, exp_times=exp_TIMES)
     elif exp_MODE == "hp_num":
         exp_hp_num(exp_H, exp_W, exp_K, exp_ALPHA, jnp.array(exp_BETA), exp_times=exp_TIMES)
+    elif exp_MODE == "mbm_appqua":
+        exp_mbm_appqua(exp_H, exp_W, exp_K, exp_ALPHA, jnp.array(exp_BETA), exp_times=exp_TIMES)
+    elif exp_MODE == "mbm_transformation":
+        exp_mbm_transformation(5, exp_K, exp_times=exp_TIMES)
+    elif exp_MODE == "mbm_naive_transformation":
+        exp_mbm_naive_transformation(5, exp_K, exp_times=exp_TIMES)

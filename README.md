@@ -48,5 +48,7 @@ pip install dist/*.whl --force-reinstall
 3. Exp
 
     ```
-    python exp.py -s woe -m vp hp_cat hp_num -t 1 -H 1000 10000 100000 -W 10 50 100 -K 5 10 20 
+    python -u exp.py -s woe -m vp hp_cat hp_num -t 1 -H 1000 10000 100000 -W 10 50 100 -K 5 10 20 2>&1 | tee output/LANLOG
+    python -u exp.py -s woe -m mbm_appqua -t 1 -H 1000 10000 100000 -W 1 2>&1 | tee output/LANLOG
+    python -u exp.py -s woe -m mbm_transformation mbm_naive_transformation -t 1 -H 100000 -W 10 -K 5 10 20 2>&1 | tee output/LANLOG
     ```
