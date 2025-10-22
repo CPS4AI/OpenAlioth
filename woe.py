@@ -146,7 +146,7 @@ class DDSketch:
             temp = jnp.bincount(tau, minlength=exp_OVERFLOW_FACTOR * W * self.K).reshape((W, -1))
             if temp.shape[1] > self.K * exp_OVERFLOW_FACTOR:
                 
-                raise Exception("Overflowed positive values")
+                raise Exception(f"Overflowed positive value: {temp.shape[1]} vs {self.K} x {exp_OVERFLOW_FACTOR}")
             sum_overflow = jnp.sum(temp[:, self.K:], axis=1)
             if sum_overflow.size > 0:
                 print( "Warning: bucket numbers (K) is too small to hold all negative values.")
@@ -165,7 +165,7 @@ class DDSketch:
             tau = self.logical_index(X_pos) + self.bucket_offset[col_pos] + self.K * col_pos
             temp = jnp.bincount(tau, minlength=exp_OVERFLOW_FACTOR * W * self.K).reshape((W, -1))
             if temp.shape[1] > self.K * exp_OVERFLOW_FACTOR:
-                raise Exception("Overflowed positive values")
+                raise Exception(f"Overflowed positive value: {temp.shape[1]} vs {self.K} x {exp_OVERFLOW_FACTOR}")
             sum_overflow = jnp.sum(temp[:, self.K:], axis=1)
             if sum_overflow.size > 0:
                 print( "Warning: bucket numbers (K) is too small to hold all positive values.")
@@ -390,9 +390,10 @@ class DataEncoder():
         H, W = X.shape
         C = jnp.full((H, W, quantile_counts + 1), True) # (H, W, quantile_counts + 1)
         C = C.at[:, :, :-1].set(X[:, :, jnp.newaxis] < I[jnp.newaxis, :, :])
-        binary_features = C[:, :, :-1] ^ C[:, :, 1:]  # (H, W, quantile_counts)
+        C = C.at[:, :, :-1].set(C[:, :, :-1] ^ C[:, :, 1:])
+        binary_features = C  # (H, W, quantile_counts + 1)
         
-        return binary_features.squeeze(-1)
+        return binary_features.reshape(H, W * (quantile_counts + 1))
     
 
 import spu.spu_pb2 as spu_pb2
@@ -550,7 +551,7 @@ def exp_mbm_appqua(H, W, K, alpha, beta, exp_times=1):
     H1, H2 = U.shape[0], V.shape[0]
     dds = DDSketch(alpha, beta)
     # dds.update_params_from_range(jnp.min(X, axis=0), jnp.max(X, axis=0))
-    dds.K = 70
+    dds.K = K
     dds.bucket_offset = dds.get_bucket_offset(jnp.min(X, axis=0), jnp.max(X, axis=0))
     
     def ddsketch_global(Su, Sv):
@@ -640,7 +641,8 @@ if __name__ == "__main__":
     elif exp_MODE == "hp_cat":
         exp_hp_cat(exp_H, exp_W, exp_K, exp_times=exp_TIMES)
     elif exp_MODE == "hp_num":
-        exp_hp_num(exp_H, exp_W, exp_K, exp_ALPHA, jnp.array(exp_BETA), exp_times=exp_TIMES)
+        exp_BETA = jnp.arange(1, exp_K) * 0.05
+        exp_hp_num(exp_H, exp_W, exp_K, exp_ALPHA, exp_BETA, exp_times=exp_TIMES)
     elif exp_MODE == "mbm_appqua":
         exp_mbm_appqua(exp_H, exp_W, exp_K, exp_ALPHA, jnp.array(exp_BETA), exp_times=exp_TIMES)
     elif exp_MODE == "mbm_transformation":
