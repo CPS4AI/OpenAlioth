@@ -25,6 +25,7 @@
                     "field": "FM64",
                     "enable_pphlo_profile": true,
                     "enable_hal_profile": true,
+                    "max_concurrency": 16,
                     "fxp_exp_mode": 0, 
                     "fxp_exp_iters": 4,
                     "fxp_fraction_bits": 16,

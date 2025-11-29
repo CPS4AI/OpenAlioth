@@ -11,10 +11,14 @@ if "http_proxy" in os.environ:
     del os.environ["http_proxy"]
 if "https_proxy" in os.environ:
     del os.environ["https_proxy"]
+
+# "FLAGS_stack_size_normal=8388608 FLAGS_bthread_concurrency=8"
+os.environ["FLAGS_stack_size_normal"] = "8388608"
+os.environ["FLAGS_bthread_concurrency"] = "8"
+env = os.environ.copy()
     
     
 NODECTL_QUIT_TIMEOUT = 20
-
 
 
 "---------------------------------- Parser ----------------------------------"
@@ -33,7 +37,7 @@ TEST_SUIT_MAP = {
 }
 
 
-"---------------------------------- Main ----------------------------------"
+"---------------------------------- Main ----------------------------------"    
 def quick_exp(test_suit: str, exp_modes: list, exp_times: int, exp_Hs: list, exp_Ws: list, exp_Ks: list, exp_alpha: float=0.01, exp_betas: list=[0.5]):
     '''
     Run the quick experiment.
@@ -83,6 +87,18 @@ def quick_exp(test_suit: str, exp_modes: list, exp_times: int, exp_Hs: list, exp
                     print(f"task cmd:            {task_cmd}")
                     print(f"main log path:       {main_log_path}")
                     
+                    def is_dead_test() -> bool:
+                        if mode == "hp_num" and H >= 100000 and W >= 100 and K >= 20:
+                            return True
+                        else:
+                            return False
+                    
+                    # if is_dead_test():
+                    #     print("[Warning] Dead test detected. Skip this test case to save time.")
+                    #     continue
+                    
+                    time.sleep(5)
+                    
                     # open the subprecess.
                     with open(node_log_path, "w") as node_log_f, open(main_log_path, "w") as main_log_f:
                         node_log_f.write(""), main_log_f.write("")
@@ -110,7 +126,7 @@ def quick_exp(test_suit: str, exp_modes: list, exp_times: int, exp_Hs: list, exp
                                     nodectl.send_signal(signal.SIGTERM)
                                 else:
                                     print("\nDone.")
-                                    break                
+                                    break
             
 
 if __name__ == "__main__":

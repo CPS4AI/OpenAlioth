@@ -3,6 +3,7 @@ import json
 
 import jax
 import jax.numpy as jnp
+# from jax.nn import identity
 from jax import random
 import spu
 import time
@@ -12,6 +13,8 @@ import argparse
 # exp_W           = [10, 50, 100]
 # exp_K           = [5, 10, 20]
 
+def identity(x):
+    return x
 
 '''
 Quantile.
@@ -184,7 +187,7 @@ class DDSketch:
         min_logical_index = self.logical_index(min_abs_value)
         max_logical_index = self.logical_index(max_abs_value)
         self.bucket_offset = -min_logical_index
-        self.K = jnp.max(max_logical_index - min_logical_index + 1).astype(jnp.int32)
+        self.K = jnp.max(max_logical_index - min_logical_index + 1).astype(jnp.int32).item()
         return self.K, self.bucket_offset
     
     def get_bucket_offset(self, min_abs_value: jax.Array, max_abs_value: jax.Array):
@@ -206,16 +209,22 @@ def vectorized_sec_woe(z_pos: jax.Array, z_neg: jax.Array, zeta: jax.Array):
     return jnp.log(temp)
 
 
-def transformation(B: jax.Array, w: jax.Array, max_cats: int = 1):
-    # ! Alert: W' = W * max_cats, i.e. B and w has been padding.
+def transformation(B: jax.Array, w: jax.Array, max_cat: int = 1):
+    # ! Alert: W' = W * max_cat, i.e. B and w has been padding.
     # B: (H, W')
     # w: (W', num_labels)
-    B = jnp.reshape(B, (B.shape[0], B.shape[1] // max_cats, max_cats))
-    B = jnp.transpose(B, (1, 0, 2))
-    w = jnp.reshape(w, (w.shape[0] // max_cats, max_cats, w.shape[1]))
+    B = jnp.reshape(B, (B.shape[0], B.shape[1] // max_cat, max_cat))  # B: (H, W, max_cat)
+    B = jnp.transpose(B, (1, 0, 2)) # B: (W, H, max_cat)
+    w = jnp.reshape(w, (w.shape[0] // max_cat, max_cat, w.shape[1]))  # w: (W, max_cat, num_labels)
     Lam = jax.lax.batch_matmul(B, w)
     Lam = jnp.transpose(Lam, (1, 0, 2))
     return Lam
+
+def transformation_with_max_cat(max_cat):
+    m_max_cat = max_cat
+    def transformation_inner(B, w):
+        return transformation(B, w, max_cat=m_max_cat)
+    return transformation_inner
 
 
 '''
@@ -356,11 +365,11 @@ class DataEncoder():
     def encode_vp(self, X: jax.Array):
         H, W = X.shape
         
-        max_cats = jnp.max(X, axis=0)
+        max_cats = jnp.max(X, axis=0) + 1
         binary_features = []
         
         for feature_idx in range(W):
-            n_classes = max_cats[feature_idx] + 1
+            n_classes = max_cats[feature_idx]
             
             for class_val in range(n_classes):
                 binary_feature = (X[:, feature_idx] == class_val).astype(jnp.int32)
@@ -374,14 +383,17 @@ class DataEncoder():
         binary_features = []
         
         for feature_idx in range(W):
-            n_classes = max_cats[feature_idx] + 1
+            n_classes = max_cats[feature_idx]
             
             for class_val in range(n_classes):
                 binary_feature = (X[:, feature_idx] == class_val).astype(jnp.int32)
                 binary_features.append(binary_feature)
-        
-        return jnp.vstack(binary_features).T
-    
+
+        res = jnp.vstack(binary_features).T
+        print(f"encode_hp_cat: from ({H}, {W}) to {res.shape}")
+
+        return res
+
     def encode_hp_num(self, I: jax.Array, U: jax.Array, V: jax.Array, alpha, beta, K, buckets_offset):
         quantile_counts = I.shape[1]
         
@@ -389,15 +401,53 @@ class DataEncoder():
         X = jnp.vstack((U, V))  # (H, W)
         H, W = X.shape
         C = jnp.full((H, W, quantile_counts + 1), True) # (H, W, quantile_counts + 1)
-        C = C.at[:, :, :-1].set(X[:, :, jnp.newaxis] < I[jnp.newaxis, :, :])
+        print(f"encode_hp_num: {X.shape}, {I.shape}")
+        if exp_FLAG_LARGE_DATASET:
+            print(f"encode_hp_num: too many elements to perform LessThan.")
+            C = C.at[:H//4, :, :-1].set(X[:H//4, :, jnp.newaxis] < I[jnp.newaxis, :, :])
+            C = C.at[H//4:H//2, :, :-1].set(X[H//4:H//2, :, jnp.newaxis] < I[jnp.newaxis, :, :])
+            C = C.at[H//2:H*3//4, :, :-1].set(X[H//2:H*3//4, :, jnp.newaxis] < I[jnp.newaxis, :, :])
+            C = C.at[H*3//4:, :, :-1].set(X[H*3//4:, :, jnp.newaxis] < I[jnp.newaxis, :, :])
+        else:
+            C = C.at[:, :, :-1].set(X[:, :, jnp.newaxis] < I[jnp.newaxis, :, :])
         C = C.at[:, :, :-1].set(C[:, :, :-1] ^ C[:, :, 1:])
         binary_features = C  # (H, W, quantile_counts + 1)
         
         return binary_features.reshape(H, W * (quantile_counts + 1))
     
 
+def compute_iv(B, label, woe_value):
+    
+        pos_feature_count = jnp.sum(B, axis=0)
+        pos_label_count = jnp.sum(label, axis=0)
+        neg_label_count = label.shape[0] - pos_label_count
+        pos_feature_and_pos_label_count = label[jnp.newaxis, :] @ B
+        pos_feature_and_neg_label_count = pos_feature_count - pos_feature_and_pos_label_count
+        pos_label_rate = pos_feature_and_pos_label_count / pos_label_count
+        neg_label_rate = pos_feature_and_neg_label_count / neg_label_count
+        iv = (pos_label_rate - neg_label_rate) * woe_value
+        
+        return iv
+    
+
 import spu.spu_pb2 as spu_pb2
 import spu.utils.distributed as ppd
+
+def p0_input(x):
+    x = ppd.device("P1")(identity)(x)
+    return ppd.device("SPU")(identity)(x)
+    
+def p1_input(x):
+    x = ppd.device("P2")(identity)(x)
+    return ppd.device("SPU")(identity)(x)
+
+def co_input(x):
+    s0 = jnp.zeros_like(x)
+    s1 = x - s0
+    s0 = ppd.device("P1")(identity)(s0)
+    s1 = ppd.device("P2")(identity)(s1)
+    return ppd.device("SPU")(jnp.add)(s0, s1)
+    
 
 parser = argparse.ArgumentParser(description='distributed driver.')
 parser.add_argument("-m", "--mode", default="vp", help="vp or hp_num or hp_cat")
@@ -420,6 +470,7 @@ exp_MAX_NUM_VAL = 4
 exp_ALPHA       = args.alpha
 exp_BETA        = args.beta
 exp_OVERFLOW_FACTOR = 5
+exp_FLAG_LARGE_DATASET = False
 
 with open(args.config, 'r') as file:
     conf = json.load(file)
@@ -457,7 +508,7 @@ def exp_vp(H, W, K, exp_times=1):
         z_pos, z_neg = ppd.device("SPU")(lambda xp, xn, yp, yn: (jnp.vstack((xp, yp)), jnp.vstack((xn, yn))))(z_pos_alice, z_neg_alice, z_pos_bob, z_neg_bob)
         w = ppd.device("SPU")(vectorized_sec_woe)(z_pos, z_neg, zeta)
         B = ppd.device("SPU")(lambda BU, BV: jnp.hstack((BU, BV)))(BU, BV)
-        res = ppd.device("SPU")(transformation)(B, w)
+        res = ppd.device("SPU")(transformation_with_max_cat(K))(B, w)
         res = ppd.get(res)
         print("- woe vp time: {:.2f} s".format(time.time() - start_time))
     print("- total time: {:.2f} s".format(time.time() - total_start_time))
@@ -490,7 +541,7 @@ def exp_hp_cat(H, W, K, exp_times=1):
 
         w = ppd.device("SPU")(vectorized_sec_woe)(z_pos, z_neg, zeta)
         B = ppd.device("SPU")(lambda BU, BV: jnp.vstack((BU, BV)))(BU, BV)
-        res = ppd.device("SPU")(transformation)(B, w)
+        res = ppd.device("SPU")(transformation_with_max_cat(K))(B, w)
         res = ppd.get(res)
         print("- woe hp cat time: {:.2f} s".format(time.time() - start_time))
     print("- total time: {:.2f} s".format(time.time() - total_start_time))
@@ -506,8 +557,9 @@ def exp_hp_num(H, W, K, alpha, beta, exp_times=1):
     U, V, yu, yv = dataset_generator.split_hp(X, y, 0.5)
     H1, H2 = U.shape[0], V.shape[0]
     dds = DDSketch(alpha, beta)
-    dds.bucket_offset = dds.get_bucket_offset(jnp.min(X, axis=0), jnp.max(X, axis=0))
-    dds.K = K
+    dds.update_params_from_range(jnp.min(X, axis=0), jnp.max(X, axis=0))
+    # dds.bucket_offset = dds.get_bucket_offset(jnp.min(X, axis=0), jnp.max(X, axis=0))
+    # dds.K = K
     
     def ddsketch_global(Su, Sv):
         return dds.ddsketch_global(Su, Sv, W)
@@ -535,7 +587,7 @@ def exp_hp_num(H, W, K, alpha, beta, exp_times=1):
         z_pos, z_neg, zeta = ppd.device("SPU")(woehp.get_all_for_num)(B, yu, yv)
 
         w = ppd.device("SPU")(vectorized_sec_woe)(z_pos, z_neg, zeta)
-        res = ppd.device("SPU")(transformation)(B, w)
+        res = ppd.device("SPU")(transformation_with_max_cat(len(beta) + 1))(B, w)
         res = ppd.get(res)
         print("- woe hp num time: {:.2f} s".format(time.time() - start_time))
     print("- total time: {:.2f} s".format(time.time() - total_start_time))
@@ -550,9 +602,10 @@ def exp_mbm_appqua(H, W, K, alpha, beta, exp_times=1):
     U, V, yu, yv = dataset_generator.split_hp(X, y, 0.5)
     H1, H2 = U.shape[0], V.shape[0]
     dds = DDSketch(alpha, beta)
-    # dds.update_params_from_range(jnp.min(X, axis=0), jnp.max(X, axis=0))
+    dds.update_params_from_range(jnp.min(X, axis=0), jnp.max(X, axis=0))
     dds.K = K
-    dds.bucket_offset = dds.get_bucket_offset(jnp.min(X, axis=0), jnp.max(X, axis=0))
+    # dds.K = K
+    # dds.bucket_offset = dds.get_bucket_offset(jnp.min(X, axis=0), jnp.max(X, axis=0))
     
     def ddsketch_global(Su, Sv):
         return dds.ddsketch_global(Su, Sv, W)
@@ -591,7 +644,7 @@ def exp_mbm_transformation(Kj, Km, H=10000, W=10, num_label=1, exp_times=1):
         w = ppd.device("SPU")(lambda w0, w1: w0 + w1)(w0, w1)
         
         transformation_start = time.time()
-        res = ppd.device("SPU")(transformation)(B, w)
+        res = ppd.device("SPU")(transformation_with_max_cat(Km))(B, w)
         res = ppd.get(res)
         print("- microbenchmark transformation time: {:.2f} s".format(time.time() - transformation_start))
     print("- total time: {:.2f} s".format(time.time() - start_time))
@@ -600,27 +653,19 @@ def exp_mbm_transformation(Kj, Km, H=10000, W=10, num_label=1, exp_times=1):
 def exp_mbm_naive_transformation(Kj, Km, H=10000, W=100, num_label=1, exp_times=1):
     print("-----------------------naive transformation-----------------------")
     
-    def p0_input(x):
-        x = ppd.device("P1")(lambda x: x)(x)
-        return ppd.device("SPU")(lambda x: x)(x)
-    
-    def p1_input(x):
-        x = ppd.device("P2")(lambda x: x)(x)
-        return ppd.device("SPU")(lambda x: x)(x)
-    
     def naive_transformation(B, w):
         return jnp.matmul(B, w)
     
     start_time = time.time()
     for i in range(exp_times):
-        w0, w1 = [p0_input(jnp.zeros((Km, num_label), dtype=jnp.float32))], [p1_input(jnp.ones((Km, num_label), dtype=jnp.float32))]
+        w0, w1 = [p0_input(jnp.zeros((Kj, num_label), dtype=jnp.float32))], [p1_input(jnp.ones((Kj, num_label), dtype=jnp.float32))]
         for j in range(W - 1):
-            w0.append(p0_input(jnp.zeros((Kj, num_label), dtype=jnp.float32)))
-            w1.append(p1_input(jnp.ones((Kj, num_label), dtype=jnp.float32)))
-        B0, B1 = [p0_input(jnp.zeros((H, Km), dtype=jnp.int32))], [p1_input(jnp.ones((H, Km), dtype=jnp.int32))]
+            w0.append(p0_input(jnp.zeros((Km, num_label), dtype=jnp.float32)))
+            w1.append(p1_input(jnp.ones((Km, num_label), dtype=jnp.float32)))
+        B0, B1 = [p0_input(jnp.zeros((H, Kj), dtype=jnp.int32))], [p1_input(jnp.ones((H, Kj), dtype=jnp.int32))]
         for j in range(W - 1):
-            B0.append(p0_input(jnp.zeros((H, Kj), dtype=jnp.int32)))
-            B1.append(p1_input(jnp.ones((H, Kj), dtype=jnp.int32)))
+            B0.append(p0_input(jnp.zeros((H, Km), dtype=jnp.int32)))
+            B1.append(p1_input(jnp.ones((H, Km), dtype=jnp.int32)))
         w, B = [], []
         for j in range(W):
             w.append(ppd.device("SPU")(lambda w0, w1: w0 + w1)(w0[j], w1[j]))
@@ -633,9 +678,170 @@ def exp_mbm_naive_transformation(Kj, Km, H=10000, W=100, num_label=1, exp_times=
             res.append(ppd.get(temp))
         print("- microbenchmark naive transformation time: {:.2f} s".format(time.time() - transformation_start))
     print("- total time: {:.2f} s".format(time.time() - start_time))
+    
+def exp_iv_gcd_vp():
+    exp_H = 800
+    exp_W = 20
+    exp_K = 5
+    
+    print("-----------------------IV SETTING-----------------------")
+    print(f"+ experiment parameters: H={exp_H}, W={exp_W}, K={exp_K}")
+    print(f"dataset: GCD, mode: vp")
+    start_time = time.time()
+    
+    print("-----------------------COMPUTE WOE VP-----------------------")
+    exp_vp(exp_H, exp_W, exp_K, exp_times=1)
+    woe_time = time.time()
+    
+    print("-----------------------COMPUTE IV VP-----------------------")
+    # (H, W * K)
+    Wu = exp_W * exp_K // 2
+    Wv = exp_W * exp_K - Wu
+    BU = random.randint(random.PRNGKey(42), (exp_H, Wu), minval=0, maxval=2)
+    BV = random.randint(random.PRNGKey(42), (exp_H, Wv), minval=0, maxval=2)
+    label = random.randint(random.PRNGKey(42), (exp_H, 1), minval=0, maxval=2)
+    woe_value_v = random.uniform(random.PRNGKey(42), (Wu, 1), minval=-3, maxval=3)
+    woe_value_shared = random.uniform(random.PRNGKey(42), (Wv, 1), minval=-3, maxval=3)
+    
+    BU = p0_input(BU)
+    BV = p1_input(BV)
+    label = p1_input(BV)
+    woe_value_v = p1_input(woe_value_v)
+    woe_value_shared = co_input(woe_value_shared)
+    
+    iv_v = ppd.device("P2")(compute_iv)(BV, label, woe_value_v)
+    iv_s = ppd.device("SPU")(compute_iv)(BU, label, woe_value_v)
+    iv_v = ppd.get(iv_v)
+    iv_s = ppd.get(iv_s)
+    iv_time = time.time()
+    print("- total time: {:.2f} s".format(iv_time - start_time))
+    print("- woe time: {:.2f} s".format(woe_time - start_time))
+    print("- iv time: {:.2f} s".format(iv_time - woe_time))
+    
 
+def exp_iv_gcd_hp():
+    H = 800
+    W_cat = 13
+    K_cat = 5
+    W_num = 7
+    K_num = 5
+    beta = jnp.arange(1, K_num) * 0.05
+    
+    print("-----------------------IV SETTING-----------------------")
+    print(f"+ experiment parameters: H={H}, W_cat={W_cat}, K_cat={K_cat}, W_num={W_num}, K_num={K_num}, beta={beta}")
+    print(f"dataset: GCD, mode: hp")
+    start_time = time.time()
+    
+    print("-----------------------COMPUTE WOE HP-----------------------")
+    exp_hp_cat(H, W_cat, K_cat, exp_times=1)
+    exp_hp_num(H, W_num, K_num, exp_ALPHA, beta, exp_times=1)
+    woe_time = time.time()
+    
+    print("-----------------------COMPUTE IV HP-----------------------")
+    # (H, W * K)
+    B = random.randint(random.PRNGKey(42), (H, W_cat * K_cat + W_num * K_num), minval=0, maxval=2)
+    label = random.randint(random.PRNGKey(42), (H, 1), minval=0, maxval=2)
+    woe_value = random.uniform(random.PRNGKey(42), (W_cat * K_cat + W_num * K_num, 1), minval=-3, maxval=3)
+    
+    B = co_input(B)
+    label = co_input(label)
+    woe_value = co_input(woe_value)
+    
+    iv = ppd.device("SPU")(compute_iv)(B, label, woe_value)
+    iv = ppd.get(iv)
+    iv_time = time.time()
+    print("- total time: {:.2f} s".format(iv_time - start_time))
+    print("- woe time: {:.2f} s".format(woe_time - start_time))
+    print("- iv time: {:.2f} s".format(iv_time - woe_time))
+    
+    
+
+def exp_iv_hcdr_vp():
+    exp_H = 307511
+    exp_W_cat = 51
+    exp_K_cat = 5
+    exp_W_num = 69
+    exp_K_num = 10
+    exp_beta = jnp.arange(1, exp_K_num) * 0.05
+    global exp_FLAG_LARGE_DATASET
+    exp_FLAG_LARGE_DATASET = True
+    
+    print("-----------------------IV SETTING-----------------------")
+    print(f"+ experiment parameters: H={exp_H}, W={exp_W}, K={exp_K}")
+    print(f"dataset: HCDR, mode: vp")
+    start_time = time.time()
+    
+    print("-----------------------COMPUTE WOE VP-----------------------")
+    exp_vp(exp_H, exp_W_cat, exp_K_cat, exp_times=1)
+    exp_vp(exp_H, exp_W_num, exp_K_num, exp_times=1)
+    woe_time = time.time()
+    
+    print("-----------------------COMPUTE IV VP-----------------------")
+    # (H, W * K)
+    Wu = (exp_W_cat * exp_K_cat + exp_W_num * exp_K_num) // 2
+    Wv = (exp_W_cat * exp_K_cat + exp_W_num * exp_K_num) - Wu
+    BU = random.randint(random.PRNGKey(42), (exp_H, Wu), minval=0, maxval=2)
+    BV = random.randint(random.PRNGKey(42), (exp_H, Wv), minval=0, maxval=2)
+    label = random.randint(random.PRNGKey(42), (exp_H, 1), minval=0, maxval=2)
+    woe_value_u = random.uniform(random.PRNGKey(42), (Wu, 1), minval=-3, maxval=3)
+    woe_value_v = random.uniform(random.PRNGKey(42), (Wv, 1), minval=-3, maxval=3)
+    
+    BU = p0_input(BU)
+    BV = p1_input(BV)
+    label = p1_input(label)
+    woe_value_u = co_input(woe_value_u)
+    woe_value_v = p1_input(woe_value_v)
+    
+    iv_u = ppd.device("SPU")(compute_iv)(BU, label, woe_value_u)
+    iv_v = ppd.device("SPU")(compute_iv)(BV, label, woe_value_v)
+    iv_u = ppd.get(iv_u)
+    iv_v = ppd.get(iv_v)
+    iv_time = time.time()
+    print("- total time: {:.2f} s".format(iv_time - start_time))
+    print("- woe time: {:.2f} s".format(woe_time - start_time))
+    print("- iv time: {:.2f} s".format(iv_time - woe_time))
+    
+    
+def exp_iv_hcdr_hp():
+    H = 307511
+    W_cat = 51
+    K_cat = 5
+    W_num = 69
+    K_num = 10
+    beta = jnp.arange(1, K_num) * 0.05
+    global exp_FLAG_LARGE_DATASET
+    exp_FLAG_LARGE_DATASET = True
+    
+    print("-----------------------IV SETTING-----------------------")
+    print(f"+ experiment parameters: H={H}, W_cat={W_cat}, K_cat={K_cat}, W_num={W_num}, K_num={K_num}, beta={beta}")
+    print(f"dataset: HCDR, mode: hp")
+    start_time = time.time()
+    
+    print("-----------------------COMPUTE WOE HP-----------------------")
+    exp_hp_cat(H, W_cat, K_cat, exp_times=1)
+    exp_hp_num(H, W_num, K_num, exp_ALPHA, beta, exp_times=1)
+    woe_time = time.time()
+    
+    print("-----------------------COMPUTE IV HP-----------------------")
+    # (H, W * K)
+    B = random.randint(random.PRNGKey(42), (H, W_cat * K_cat + W_num * K_num), minval=0, maxval=2)
+    label = random.randint(random.PRNGKey(42), (H, 1), minval=0, maxval=2)
+    woe_value = random.uniform(random.PRNGKey(42), (W_cat * K_cat + W_num * K_num, 1), minval=-3, maxval=3)
+    
+    B = p0_input(B)
+    label = p1_input(label)
+    woe_value = co_input(woe_value)
+    
+    iv = ppd.device("SPU")(compute_iv)(B, label, woe_value)
+    iv = ppd.get(iv)
+    iv_time = time.time()
+    print("- total time: {:.2f} s".format(iv_time - start_time))
+    print("- woe time: {:.2f} s".format(woe_time - start_time))
+    print("- iv time: {:.2f} s".format(iv_time - woe_time))
+    
 
 if __name__ == "__main__":
+    exp_FLAG_LARGE_DATASET = exp_H * exp_W * exp_K > 100000 * 100 * 10
     if exp_MODE == "vp":
         exp_vp(exp_H, exp_W, exp_K, exp_times=exp_TIMES)
     elif exp_MODE == "hp_cat":
@@ -646,6 +852,14 @@ if __name__ == "__main__":
     elif exp_MODE == "mbm_appqua":
         exp_mbm_appqua(exp_H, exp_W, exp_K, exp_ALPHA, jnp.array(exp_BETA), exp_times=exp_TIMES)
     elif exp_MODE == "mbm_transformation":
-        exp_mbm_transformation(5, exp_K, exp_times=exp_TIMES)
+        exp_mbm_transformation(5, exp_K, exp_H, exp_W, exp_times=exp_TIMES)
     elif exp_MODE == "mbm_naive_transformation":
-        exp_mbm_naive_transformation(5, exp_K, exp_times=exp_TIMES)
+        exp_mbm_naive_transformation(5, exp_K, exp_H, exp_W, exp_times=exp_TIMES)
+    elif exp_MODE == "iv_gcd_vp":
+        exp_iv_gcd_vp()
+    elif exp_MODE == "iv_gcd_hp":
+        exp_iv_gcd_hp()
+    elif exp_MODE == "iv_hcdr_vp":
+        exp_iv_hcdr_vp()
+    elif exp_MODE == "iv_hcdr_hp":
+        exp_iv_hcdr_hp()

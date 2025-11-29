@@ -1,6 +1,6 @@
 # TL;DR
 
-```shell
+```sh
 git clone https://github.com/AntCPLab/OpenBumbleBee.git
 cd OpenBumbleBee
 python setup.py bdist_wheel
@@ -47,13 +47,40 @@ pip install dist/*.whl --force-reinstall
 
 3. Exp
 
-    ```
+    ```sh
     python -u exp.py -s woe -m vp hp_cat hp_num -t 1 -H 1000 10000 100000 -W 10 50 100 -K 5 10 20 2>&1 | tee output/LANLOG
-    python -u exp.py -s woe -m mbm_appqua -t 1 -H 1000 10000 100000 -W 1 2>&1 | tee output/LANLOG
-    python -u exp.py -s woe -m mbm_transformation mbm_naive_transformation -t 1 -H 100000 -W 10 -K 5 10 20 2>&1 | tee output/LANLOG
-
-    python -u exp.py -s woe -m hp_num -t 1 -H 1000 10000 100000 -W 10 50 100 -K 5 10 20 2>&1 | tee output/LANLOG
-    python -u exp.py -s woe -m hp_num -t 1 -H 1000 10000 -W 10 50 100 -K 5 10 20 2>&1 | tee output/WANLOG
-
+    # python -u exp.py -s woe -m mbm_appqua -t 1 -H 1000 10000 100000 -W 1 2>&1 | tee output/LANLOG
     python -u exp.py -s woe -m mbm_appqua -t 1 -H 10000 -W 1 -K 100 1000 10000 2>&1 | tee output/LANLOG
+    python -u exp.py -s woe -m mbm_transformation mbm_naive_transformation -t 1 -H 10000 -W 100 -K 5 10 20 2>&1 | tee output/LANLOG
+
+    # GCD, VP
+    python -u exp.py -s woe -m vp -t 1 -H 800 -W 20 -K 5 2>&1 | tee output/LANLOG_GCD_VP
+    # GCD, HP
+    python -u exp.py -s woe -m hp_cat -t 1 -H 800 -W 13 -K 5 2>&1 | tee output/LANLOG_GCD_HP_CAT
+    python -u exp.py -s woe -m hp_num -t 1 -H 800 -W 7 -K 5 2>&1 | tee output/LANLOG_GCD_HP_NUM
+
+    # HCDR, VP
+    python -u exp.py -s woe -m vp -t 1 -H 307511 -W 51 -K 5 2>&1 | tee output/LANLOG_HCDR_VP_CAT
+    python -u exp.py -s woe -m vp -t 1 -H 307511 -W 69 -K 10 2>&1 | tee output/LANLOG_HCDR_VP_NUM
+    # HCDR, HP
+    python -u exp.py -s woe -m hp_cat -t 1 -H 307511 -W 51 -K 5 2>&1 | tee output/LANLOG_HCDR_HP_CAT
+    python -u exp.py -s woe -m hp_num -t 1 -H 307511 -W 69 -K 10 2>&1 | tee output/LANLOG_HCDR_HP_NUM
+
+    python -u exp.py -s woe -m iv_gcd_vp iv_gcd_hp iv_hcdr_vp iv_hcdr_hp 2>&1 | tee output/LAN_LOG_IV
     ```
+
+    # HCDR, VP
+    python -u exp.py -s woe -m vp -t 1 -H 307511 -W 69 -K 10 2>&1 | tee output/WANLOG_HCDR_VP_NUM
+    # HCDR, HP
+    python -u exp.py -s woe -m hp_num -t 1 -H 307511 -W 69 -K 10 2>&1 | tee output/WANLOG_HCDR_HP_NUM
+    # IV
+    python -u exp.py -s woe -m iv_gcd_vp iv_gcd_hp iv_hcdr_vp iv_hcdr_hp 2>&1 | tee output/WANLOG_IV
+    # WOE HP_NUM
+    python -u exp.py -s woe -m hp_num -t 1 -H 1000 10000 100000 -W 10 50 100 -K 5 10 20 2>&1 | tee output/WANLOG_HP_NUM
+    # APPQUA
+    python -u exp.py -s woe -m mbm_appqua -t 1 -H 1000 10000 100000 -W 1 2>&1 | tee output/WANLOG_APPQUA
+
+    python lr.py -m gcd_woe | tee LOG_GCD_WOE
+    python lr.py -m gcd_normal | tee LOG_GCD_NORMAL
+    python lr.py -m hcdr_woe | tee LOG_HCDR_WOE
+    python lr.py -m hcdr_normal | tee LOG_HCDR_NORMAL
