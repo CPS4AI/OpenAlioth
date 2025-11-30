@@ -57,7 +57,7 @@ pip install dist/*.whl --force-reinstall
     python woe.py -c `pwd`/conf/2pc_alioth.json
     ```
 
-### 3. Exp
+### 3. Experiments
 
     ```sh
     python -u exp.py -s woe -m vp hp_cat hp_num -t 1 -H 1000 10000 100000 -W 10 50 100 -K 5 10 20 2>&1 | tee output/LANLOG
