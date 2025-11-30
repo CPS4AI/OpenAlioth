@@ -10,7 +10,7 @@ This repository is built upon [SecretFlow-SPU](https://github.com/secretflow/spu
 
 ## Build
 
-# TL;DR
+### TL;DR
 
 ```sh
 git clone https://github.com/AntCPLab/OpenBumbleBee.git
@@ -37,7 +37,7 @@ python setup.py bdist_wheel
 pip install dist/*.whl --force-reinstall
 ```
 
-# WOE Example
+## WOE Example
 
 1. Launch SPU backend runtime
 
@@ -65,11 +65,11 @@ pip install dist/*.whl --force-reinstall
     python -u exp.py -s woe -m mbm_appqua -t 1 -H 10000 -W 1 -K 100 1000 10000 2>&1 | tee output/LANLOG
     python -u exp.py -s woe -m mbm_transformation mbm_naive_transformation -t 1 -H 10000 -W 100 -K 5 10 20 2>&1 | tee output/LANLOG
     ```
-    # GCD, VP
+    ### GCD, VP
     ```sh
     python -u exp.py -s woe -m vp -t 1 -H 800 -W 20 -K 5 2>&1 | tee output/LANLOG_GCD_VP
     ```
-    # GCD, HP
+    ### GCD, HP
     ```sh
     python -u exp.py -s woe -m hp_cat -t 1 -H 800 -W 13 -K 5 2>&1 | tee output/LANLOG_GCD_HP_CAT
     python -u exp.py -s woe -m hp_num -t 1 -H 800 -W 7 -K 5 2>&1 | tee output/LANLOG_GCD_HP_NUM
