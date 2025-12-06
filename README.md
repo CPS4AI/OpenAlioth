@@ -3,7 +3,8 @@
 
 ## Introduction
 
-ALIOTH is a two-party framework for WoE-based dataset transformation for horizontal and vertical data partitions. The eprint version is available on Crypto-Eprint [ALIOTH](ALIOTH: An Efficient and Secure Weight-of-Evidence Framework for Privacy-Preserving Data Processing).
+ALIOTH is a two-party framework for WoE-based dataset transformation for horizontal and vertical data partitions. The eprint version is available on Cryptology-ePrint [ALIOTH](https://eprint.iacr.org/2025/2188).
+
 This repository is built upon [SecretFlow-SPU](https://github.com/secretflow/spu) with optimizations from [OpenBumbleBee](https://github.com/AntCPLab/OpenBumbleBee), which provides a prototype implementation of ALIOTH, intended solely for experimental testing purposes and SHOULD NOT be used in production environments.
 
 
