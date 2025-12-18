@@ -104,7 +104,7 @@ pip install dist/*.whl --force-reinstall
     python lr.py -m hcdr_normal | tee LOG_HCDR_NORMAL
     ```
 
-## Citing ALIOTH
+## Citing
 
 ```text
 @misc{cryptoeprint:2025/2188,
